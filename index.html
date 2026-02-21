@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Community Scout — Find New X Communities First</title>
+<meta name="description" content="Discover brand new X Communities the moment they're created. Real-time scanner for crypto & memecoin traders."/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:      #080b10;
+    --surface: #0d1117;
+    --card:    #111820;
+    --border:  #1e2d3d;
+    --accent:  #00f5c4;
+    --accent2: #ff3d6e;
+    --accent3: #7b61ff;
+    --yellow:  #f5c400;
+    --orange:  #ff8c00;
+    --text:    #e8f4f8;
+    --muted:   #5a7a8a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Syne', sans-serif; min-height: 100vh; }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image: linear-gradient(rgba(0,245,196,0.025) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(0,245,196,0.025) 1px, transparent 1px);
+    background-size: 44px 44px; pointer-events: none; z-index: 0;
+  }
+  .wrap { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }
+
+  /* ── HEADER ── */
+  header {
+    padding: 22px 0 18px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border); margin-bottom: 28px; gap: 12px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; }
+  .brand-icon {
+    width: 36px; height: 36px; background: var(--accent); border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 700; color: var(--bg); font-family: 'Space Mono', monospace;
+    animation: glow 3s ease-in-out infinite; flex-shrink: 0;
+  }
+  @keyframes glow { 0%,100%{box-shadow:0 0 16px rgba(0,245,196,0.35)} 50%{box-shadow:0 0 36px rgba(0,245,196,0.65)} }
+  .brand-text h1 { font-size: 16px; font-weight: 800; color: var(--text); }
+  .brand-text h1 span { color: var(--accent); }
+  .brand-text p  { font-size: 10px; color: var(--muted); font-family: 'Space Mono', monospace; margin-top: 1px; }
+
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .status-chip {
+    display: flex; align-items: center; gap: 7px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 100px; padding: 6px 14px;
+    font-family: 'Space Mono', monospace; font-size: 11px; color: var(--muted);
+    transition: all 0.3s;
+  }
+  .status-chip.live   { border-color: rgba(0,245,196,0.3); color: var(--accent); }
+  .status-chip.paused { border-color: rgba(255,61,110,0.3); color: var(--accent2); }
+  .sdot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .live   .sdot { background: var(--accent); animation: blink 1.2s ease-in-out infinite; }
+  .paused .sdot { background: var(--accent2); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.15} }
+
+  /* ── HERO STATS ── */
+  .stats-row { display: flex; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stat {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 20px; min-width: 110px; flex: 1;
+  }
+  .stat-label { font-size: 10px; color: var(--muted); font-family: 'Space Mono', monospace; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .stat-value { font-size: 24px; font-weight: 800; font-family: 'Space Mono', monospace; color: var(--accent); }
+  .stat.s2 .stat-value { color: var(--text); }
+  .stat.s3 .stat-value { color: var(--text); }
+  .stat.s4 .stat-value { color: var(--yellow); }
+
+  /* ── TABS ── */
+  .tabs { display: flex; gap: 4px; margin-bottom: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 4px; width: fit-content; }
+  .tab { padding: 8px 20px; border-radius: 9px; border: none; background: transparent; color: var(--muted); font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+  .tab:hover  { color: var(--text); }
+  .tab.active { background: var(--surface); color: var(--accent); box-shadow: 0 1px 8px rgba(0,0,0,0.4); }
+
+  /* ── PANELS ── */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── CONTROLS ── */
+  .controls { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; align-items: center; }
+  .btn { padding: 10px 22px; border-radius: 10px; border: none; cursor: pointer; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; transition: all 0.2s; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-primary:hover:not(:disabled) { background: #00ffce; box-shadow: 0 0 28px rgba(0,245,196,0.45); transform: translateY(-1px); }
+  .btn-ghost { background: var(--card); border: 1px solid var(--border); color: var(--muted); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .spin { width: 13px; height: 13px; border: 2px solid rgba(0,0,0,0.2); border-top-color: currentColor; border-radius: 50%; animation: spin 0.6s linear infinite; display: none; }
+  .scanning .spin { display: block; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  .filter-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
+  .flabel { font-size: 11px; color: var(--muted); font-family: 'Space Mono', monospace; }
+  .toggle {
+    padding: 6px 14px; border-radius: 100px; border: 1px solid var(--border);
+    background: var(--card); color: var(--muted); font-family: 'Space Mono', monospace;
+    font-size: 11px; cursor: pointer; transition: all 0.15s; display: flex; align-items: center; gap: 6px;
+    user-select: none;
+  }
+  .toggle .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: all 0.15s; }
+  .toggle.on { border-color: rgba(0,245,196,0.4); color: var(--accent); }
+  .toggle.on .dot { background: var(--accent); }
+  select.sel {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 12px; color: var(--muted); font-family: 'Space Mono', monospace;
+    font-size: 11px; outline: none; cursor: pointer;
+  }
+  select.sel:focus { border-color: var(--accent); }
+
+  /* ── LAYOUT ── */
+  .layout { display: grid; grid-template-columns: 1fr 280px; gap: 20px; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+
+  /* ── FEED ── */
+  .feed { display: flex; flex-direction: column; gap: 10px; }
+
+  /* ── COMMUNITY CARD ── */
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px 20px; cursor: pointer;
+    transition: all 0.18s; animation: fadeup 0.3s ease both;
+    position: relative; overflow: hidden;
+  }
+  @keyframes fadeup { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
+  .card:hover { border-color: rgba(0,245,196,0.25); box-shadow: 0 4px 24px rgba(0,0,0,0.3); transform: translateY(-2px); }
+  .card::before { content:''; position:absolute; left:0; top:0; width:3px; height:100%; background:var(--accent); opacity:0; transition:opacity 0.18s; border-radius:3px 0 0 3px; }
+  .card:hover::before { opacity:1; }
+
+  .card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:8px; }
+  .card-id { font-family:'Space Mono',monospace; font-size:13px; font-weight:700; color:var(--text); word-break:break-all; }
+  .card-badges { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; flex-shrink:0; }
+  .badge { border-radius:100px; padding:2px 9px; font-family:'Space Mono',monospace; font-size:10px; white-space:nowrap; }
+  .badge-time { background:transparent; border:1px solid var(--border); color:var(--muted); }
+  .badge-src  { background:rgba(123,97,255,0.08); border:1px solid rgba(123,97,255,0.2); color:var(--accent3); }
+  .badge-new  { background:rgba(0,245,196,0.08); border:1px solid rgba(0,245,196,0.2); color:var(--accent); animation: subtle-pulse 2s ease infinite; }
+  @keyframes subtle-pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+  .card-tweet { font-size:12px; color:var(--muted); line-height:1.65; margin-bottom:10px; }
+  .card-foot  { display:flex; align-items:center; justify-content:space-between; padding-top:10px; border-top:1px solid var(--border); }
+  .card-rawid { font-family:'Space Mono',monospace; font-size:10px; color:var(--muted); opacity:0.3; }
+  .card-open  { font-family:'Space Mono',monospace; font-size:11px; color:var(--accent); text-decoration:none; padding:4px 10px; border:1px solid rgba(0,245,196,0.2); border-radius:6px; transition:all 0.15s; }
+  .card-open:hover { background:rgba(0,245,196,0.08); }
+
+  /* ── EMPTY ── */
+  .empty { text-align:center; padding:60px 20px; color:var(--muted); }
+  .empty-icon { font-size:42px; margin-bottom:16px; opacity:0.3; }
+  .empty h3 { font-size:15px; font-weight:700; color:var(--text); margin-bottom:8px; }
+  .empty p  { font-size:12px; line-height:1.7; max-width:340px; margin:0 auto; }
+
+  /* ── SIDEBAR ── */
+  .sidebar { display:flex; flex-direction:column; gap:16px; }
+  .scard { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .stitle { font-size:10px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:var(--muted); margin-bottom:14px; display:flex; align-items:center; gap:7px; }
+  .stitle::before { content:''; display:block; width:3px; height:13px; border-radius:2px; background:var(--accent); }
+  .stitle.purple::before { background:var(--accent3); }
+  .stitle.orange::before { background:var(--orange); }
+
+  /* Hashtags */
+  .ht-list { display:flex; flex-direction:column; gap:6px; }
+  .ht { display:flex; align-items:center; justify-content:space-between; padding:7px 10px; background:var(--surface); border:1px solid var(--border); border-radius:8px; cursor:pointer; transition:all 0.15s; }
+  .ht:hover { border-color:rgba(123,97,255,0.3); }
+  .ht-tag { font-family:'Space Mono',monospace; font-size:11px; color:var(--accent3); }
+  .ht-right { display:flex; align-items:center; gap:6px; }
+  .ht-bar { height:2px; border-radius:2px; background:linear-gradient(to right, var(--accent3), var(--accent)); }
+  .ht-n { font-family:'Space Mono',monospace; font-size:10px; color:var(--muted); }
+  .rbtn { width:100%; margin-top:10px; padding:8px; background:transparent; border:1px solid var(--border); border-radius:8px; color:var(--muted); font-family:'Space Mono',monospace; font-size:11px; cursor:pointer; transition:all 0.15s; }
+  .rbtn:hover { border-color:var(--accent); color:var(--accent); }
+
+  /* How it works */
+  .how-list { display:flex; flex-direction:column; gap:10px; }
+  .how-item { display:flex; align-items:flex-start; gap:10px; }
+  .how-num { width:20px; height:20px; background:rgba(0,245,196,0.1); border:1px solid rgba(0,245,196,0.2); border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:'Space Mono',monospace; font-size:9px; color:var(--accent); flex-shrink:0; margin-top:1px; }
+  .how-text { font-size:11px; color:var(--muted); line-height:1.6; }
+  .how-text strong { color:var(--text); }
+
+  /* Search */
+  .search-row { display:flex; gap:10px; margin-bottom:16px; }
+  .search-box { flex:1; position:relative; }
+  .search-box input { width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; padding:11px 14px 11px 40px; color:var(--text); font-family:'Space Mono',monospace; font-size:12px; outline:none; transition:all 0.2s; }
+  .search-box input:focus { border-color:var(--accent); box-shadow:0 0 20px rgba(0,245,196,0.1); }
+  .search-box input::placeholder { color:var(--muted); }
+  .sicon { position:absolute; left:13px; top:50%; transform:translateY(-50%); color:var(--muted); pointer-events:none; }
+
+  /* ── TOAST ── */
+  .toast { position:fixed; bottom:20px; right:20px; background:var(--card); border:1px solid var(--border); border-radius:10px; padding:11px 16px; font-family:'Space Mono',monospace; font-size:12px; z-index:100; opacity:0; transform:translateY(8px); transition:all 0.25s; pointer-events:none; max-width:300px; }
+  .toast.show { opacity:1; transform:none; }
+  .toast.ok  { border-color:var(--accent); color:var(--accent); }
+  .toast.err { border-color:var(--accent2); color:var(--accent2); }
+
+  /* ── FOOTER ── */
+  footer { border-top:1px solid var(--border); padding:20px 0; text-align:center; font-family:'Space Mono',monospace; font-size:10px; color:var(--muted); margin-top:40px; }
+  footer a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <header>
+    <a class="brand" href="/">
+      <div class="brand-icon">CS</div>
+      <div class="brand-text">
+        <h1>Community <span>Scout</span></h1>
+        <p>real-time X community radar</p>
+      </div>
+    </a>
+    <div class="header-right">
+      <div class="status-chip" id="statusChip">
+        <div class="sdot"></div>
+        <span id="statusTxt">Connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat">
+      <div class="stat-label">🔴 Live Feed</div>
+      <div class="stat-value" id="statDisc">—</div>
+    </div>
+    <div class="stat s2">
+      <div class="stat-label">Total Found</div>
+      <div class="stat-value" id="statTotal">—</div>
+    </div>
+    <div class="stat s3">
+      <div class="stat-label">Scans Run</div>
+      <div class="stat-value" id="statScans">—</div>
+    </div>
+    <div class="stat s4">
+      <div class="stat-label">Next Scan</div>
+      <div class="stat-value" id="statNext">—</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" id="tab-live" onclick="switchTab('live')">📡 Live Feed</button>
+    <button class="tab" id="tab-search" onclick="switchTab('search')">🔍 Search</button>
+  </div>
+
+  <!-- LIVE PANEL -->
+  <div class="panel active" id="panel-live">
+    <div class="layout">
+      <div>
+        <div class="controls">
+          <button class="btn btn-primary" id="scanBtn" onclick="triggerScan()">
+            <div class="spin"></div>
+            <span>⚡ Scan Now</span>
+          </button>
+          <button class="btn btn-ghost" onclick="clearFeed()">✕ Clear</button>
+        </div>
+        <div class="filter-row">
+          <span class="flabel">Filter:</span>
+          <div class="toggle" id="recentToggle" onclick="toggleRecent()">
+            <div class="dot"></div> Last 30 min only
+          </div>
+          <select class="sel" id="sortSel" onchange="renderFeed()">
+            <option value="newest">🕐 Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+        </div>
+        <div class="feed" id="liveFeed">
+          <div class="empty">
+            <div class="empty-icon">📡</div>
+            <h3>Waiting for first scan...</h3>
+            <p>The scanner checks X every 2 minutes for brand new communities. Hit Scan Now to trigger immediately.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <div class="scard">
+          <div class="stitle orange">📊 Trending Tags</div>
+          <div class="ht-list" id="htList">
+            <div style="color:var(--muted);font-size:11px;text-align:center;padding:8px">Loading...</div>
+          </div>
+          <button class="rbtn" onclick="loadHashtags()">↺ Refresh</button>
+        </div>
+
+        <div class="scard">
+          <div class="stitle purple">💡 How It Works</div>
+          <div class="how-list">
+            <div class="how-item">
+              <div class="how-num">1</div>
+              <div class="how-text">Scanner watches live tweets containing X community links every <strong>2 minutes</strong></div>
+            </div>
+            <div class="how-item">
+              <div class="how-num">2</div>
+              <div class="how-text">Extracts community IDs from tweets — catches communities <strong>seconds after creation</strong></div>
+            </div>
+            <div class="how-item">
+              <div class="how-num">3</div>
+              <div class="how-text">New ones appear in the feed instantly — click <strong>Open on X</strong> to check them out</div>
+            </div>
+            <div class="how-item">
+              <div class="how-num">4</div>
+              <div class="how-text">Use the <strong>Search tab</strong> to find communities by keyword</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SEARCH PANEL -->
+  <div class="panel" id="panel-search">
+    <div class="layout">
+      <div>
+        <div class="search-row">
+          <div class="search-box">
+            <span class="sicon">🔍</span>
+            <input type="text" id="searchInput" placeholder="Search keyword (e.g. memecoin, solana...)"
+              onkeydown="if(event.key==='Enter') doSearch()"/>
+          </div>
+          <button class="btn btn-primary" id="searchBtn" onclick="doSearch()">
+            <div class="spin"></div>
+            <span>Search</span>
+          </button>
+        </div>
+        <div class="feed" id="searchFeed">
+          <div class="empty">
+            <div class="empty-icon">🔍</div>
+            <h3>Search X Communities</h3>
+            <p>Enter a keyword above to find communities by topic. Results sorted by smallest first.</p>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar">
+        <div class="scard">
+          <div class="stitle orange">📊 Trending Tags</div>
+          <div class="ht-list" id="htList2">
+            <div style="color:var(--muted);font-size:11px;text-align:center;padding:8px">Loading...</div>
+          </div>
+          <button class="rbtn" onclick="loadHashtags()">↺ Refresh</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Built with 🤖 — scanning X communities in real time &nbsp;·&nbsp;
+    <a href="https://x.com" target="_blank">X / Twitter</a>
+  </footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────
+// Change this to your deployed backend URL
+const API_BASE = window.API_BASE || 'http://localhost:5000';
+
+let allData        = [];
+let showRecent     = false;
+let lastNewCount   = 0;
+
+// ── Init ──────────────────────────────────────────────────────────────
+pollHealth();
+setInterval(pollHealth, 10000);
+loadHashtags();
+
+// ── Health ────────────────────────────────────────────────────────────
+async function pollHealth() {
+  try {
+    const r = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(5000) });
+    const d = await r.json();
+
+    const chip = document.getElementById('statusChip');
+    const txt  = document.getElementById('statusTxt');
+    if (d.all_limited) {
+      chip.className = 'status-chip paused';
+      txt.textContent = 'Rate limited — cooling down';
+    } else {
+      chip.className = 'status-chip live';
+      txt.textContent = d.next_scan <= 5 ? 'Scanning...' : `Next scan ${d.next_scan}s`;
+    }
+
+    document.getElementById('statScans').textContent = d.scans_run ?? '—';
+    document.getElementById('statTotal').textContent = d.total_found ?? '—';
+    document.getElementById('statNext').textContent  = d.next_scan > 0 ? `${d.next_scan}s` : '—';
+
+    await loadFeed();
+  } catch {
+    const chip = document.getElementById('statusChip');
+    chip.className = 'status-chip';
+    document.getElementById('statusTxt').textContent = 'Offline';
+  }
+}
+
+// ── Feed ──────────────────────────────────────────────────────────────
+async function loadFeed() {
+  try {
+    const r = await fetch(`${API_BASE}/api/discoveries?limit=200`);
+    const d = await r.json();
+    allData = d.data || [];
+    document.getElementById('statDisc').textContent = allData.length;
+    renderFeed();
+  } catch {}
+}
+
+function renderFeed() {
+  const sort = document.getElementById('sortSel').value;
+  let list   = [...allData];
+
+  if (showRecent) {
+    const cut = Date.now()/1000 - 1800;
+    list = list.filter(c => c.found_at >= cut);
+  }
+  if (sort === 'oldest') list.sort((a,b) => a.found_at - b.found_at);
+
+  const el = document.getElementById('liveFeed');
+  if (!list.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">📡</div><h3>${showRecent ? 'Nothing in the last 30 minutes' : 'Feed is empty'}</h3><p>Hit Scan Now to find communities immediately, or wait for the auto-scan.</p></div>`;
+    return;
+  }
+  el.innerHTML = list.map((c,i) => cardHTML(c,i)).join('');
+}
+
+function cardHTML(c, i) {
+  const ago     = timeAgo(c.found_at);
+  const src     = (c.source||'').replace('x.com/i/communities ','').trim();
+  const isNew   = (Date.now()/1000 - c.found_at) < 300; // less than 5 min
+  const newBadge = isNew ? `<span class="badge badge-new">🆕 Just found</span>` : '';
+  const tweet   = c.tweet || '';
+
+  return `
+    <div class="card" style="animation-delay:${Math.min(i*0.03,0.5)}s">
+      <div class="card-head">
+        <div class="card-id">Community ${c.id.slice(-10)}</div>
+        <div class="card-badges">
+          ${newBadge}
+          <span class="badge badge-time">${ago}</span>
+          ${src ? `<span class="badge badge-src">${esc(src)}</span>` : ''}
+        </div>
+      </div>
+      ${tweet ? `<div class="card-tweet">${esc(tweet.substring(0,220))}</div>` : ''}
+      <div class="card-foot">
+        <div class="card-rawid">${c.id}</div>
+        <a class="card-open" href="${c.url}" target="_blank" onclick="event.stopPropagation()">Open on X ↗</a>
+      </div>
+    </div>`;
+}
+
+// ── Scan ──────────────────────────────────────────────────────────────
+async function triggerScan() {
+  const btn = document.getElementById('scanBtn');
+  btn.disabled = true; btn.classList.add('scanning');
+  toast('⚡ Scan triggered...', '');
+  try {
+    await fetch(`${API_BASE}/api/scan-now`, { method: 'POST' });
+    setTimeout(async () => {
+      await loadFeed();
+      toast('✓ Scan complete', 'ok');
+      btn.disabled = false; btn.classList.remove('scanning');
+    }, 8000);
+  } catch {
+    toast('❌ Backend unreachable', 'err');
+    btn.disabled = false; btn.classList.remove('scanning');
+  }
+}
+
+async function clearFeed() {
+  await fetch(`${API_BASE}/api/discoveries/clear`, { method:'POST' });
+  allData = [];
+  renderFeed();
+  toast('✓ Cleared', 'ok');
+}
+
+function toggleRecent() {
+  showRecent = !showRecent;
+  document.getElementById('recentToggle').classList.toggle('on', showRecent);
+  renderFeed();
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  document.getElementById(`panel-${name}`).classList.add('active');
+}
+
+// ── Search ────────────────────────────────────────────────────────────
+async function doSearch() {
+  const q   = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  const btn = document.getElementById('searchBtn');
+  btn.disabled = true; btn.classList.add('scanning');
+  try {
+    const r = await fetch(`${API_BASE}/api/communities?q=${encodeURIComponent(q)}`);
+    const d = await r.json();
+    const list = d.data || [];
+    const el = document.getElementById('searchFeed');
+    if (!list.length) {
+      el.innerHTML = `<div class="empty"><div class="empty-icon">🔎</div><h3>No results for "${esc(q)}"</h3><p>Try a different keyword.</p></div>`;
+    } else {
+      el.innerHTML = list.map((c,i) => searchCardHTML(c,i)).join('');
+    }
+  } catch { toast('❌ Search failed', 'err'); }
+  finally { btn.disabled = false; btn.classList.remove('scanning'); }
+}
+
+function searchCardHTML(c, i) {
+  const members = c.member_count;
+  const mLabel  = members != null ? `${members} members` : '? members';
+  return `
+    <div class="card" style="animation-delay:${Math.min(i*0.03,0.5)}s">
+      <div class="card-head">
+        <div class="card-id">${esc(c.name || 'Unknown')}</div>
+        <div class="card-badges">
+          <span class="badge badge-time">${mLabel}</span>
+        </div>
+      </div>
+      ${c.description ? `<div class="card-tweet">${esc(c.description.substring(0,200))}</div>` : ''}
+      <div class="card-foot">
+        <div class="card-rawid">${c.id}</div>
+        <a class="card-open" href="${c.url}" target="_blank" onclick="event.stopPropagation()">Open on X ↗</a>
+      </div>
+    </div>`;
+}
+
+// ── Hashtags ──────────────────────────────────────────────────────────
+async function loadHashtags() {
+  const ids = ['htList', 'htList2'];
+  try {
+    const r = await fetch(`${API_BASE}/api/trending-hashtags?keywords=memecoin,solana`);
+    const d = await r.json();
+    const list = d.data || [];
+    if (!list.length) { ids.forEach(id => setHt(id, '<div style="color:var(--muted);font-size:11px;text-align:center;padding:8px">No data yet</div>')); return; }
+    const max = list[0].count || 1;
+    const html = list.slice(0,12).map(h => `
+      <div class="ht" onclick="document.getElementById('searchInput').value='${h.tag.replace('#','')}';switchTab('search');doSearch()">
+        <div class="ht-tag">${h.tag}</div>
+        <div class="ht-right">
+          <div class="ht-bar" style="width:${Math.max(6,Math.round(h.count/max*48))}px"></div>
+          <div class="ht-n">${h.count}</div>
+        </div>
+      </div>`).join('');
+    ids.forEach(id => setHt(id, html));
+  } catch { ids.forEach(id => setHt(id, '<div style="color:var(--accent2);font-size:11px;text-align:center;padding:8px">Offline</div>')); }
+}
+function setHt(id, html) { const e = document.getElementById(id); if(e) e.innerHTML = html; }
+
+// ── Utils ─────────────────────────────────────────────────────────────
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function timeAgo(ts) {
+  const d = Math.round(Date.now()/1000 - ts);
+  if (d < 60)   return `${d}s ago`;
+  if (d < 3600) return `${Math.round(d/60)}m ago`;
+  if (d < 86400)return `${Math.round(d/3600)}h ago`;
+  return `${Math.round(d/86400)}d ago`;
+}
+let _tt;
+function toast(msg, type='') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = `toast show ${type}`;
+  clearTimeout(_tt); _tt = setTimeout(() => el.classList.remove('show'), 3000);
+}
+</script>
+</body>
+</html>
