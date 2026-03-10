@@ -528,19 +528,20 @@ def index():
 @app.route("/api/health")
 def health():
     accs = rotator.status() if rotator else []
+    using_xapi = bool(_config["x_bearer"])
     return jsonify({
         "status":      "ok",
         "version":     "2.0",
-        "mode":        "xapi" if _config["x_bearer"] else "twikit",
+        "mode":        "xapi" if using_xapi else "twikit",
         "ai_scoring":  bool(ANTHROPIC_KEY),
         "scans_run":   scans_run,
         "total_found": total_found,
         "ai_scored":   ai_scored,
         "discoveries": len(discoveries),
         "last_scan":   last_scan_at,
-        "next_scan":   max(0, int(last_scan_at + SCAN_INTERVAL - time.time())),
+        "next_scan":   max(0, int(last_scan_at + SCAN_INTERVAL - time.time())) if SCAN_INTERVAL else 0,
         "accounts":    accs,
-        "all_limited": all(a["limited"] for a in accs) if accs else False,
+        "all_limited": False if using_xapi else (all(a["limited"] for a in accs) if accs else False),
     })
 
 @app.route("/api/discoveries")
