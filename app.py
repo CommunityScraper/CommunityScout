@@ -83,18 +83,16 @@ def _build_accounts():
                 "password":   password,
                 "email":      email,
             })
-    if not accounts:
-        accounts = [{
-            "label":      "Account 1",
-            "auth_token": os.environ.get("AUTH_TOKEN", "").strip(),
-            "ct0":        os.environ.get("CT0", "").strip(),
-            "username":   os.environ.get("X_USERNAME", "").strip(),
-            "password":   os.environ.get("X_PASSWORD", "").strip(),
-            "email":      os.environ.get("X_EMAIL", "").strip(),
-        }]
-    return accounts
+    # Also check bare AUTH_TOKEN/CT0
+    t = os.environ.get("AUTH_TOKEN", "").strip()
+    c = os.environ.get("CT0", "").strip()
+    if t and c:
+        accounts.append({"label": "Account 1", "auth_token": t, "ct0": c,
+                         "username": "", "password": "", "email": ""})
+    return accounts  # empty list = no cookie accounts, use X API only
 
 ACCOUNTS = _build_accounts()
+rotator  = Rotator(ACCOUNTS) if ACCOUNTS else None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PERSISTENCE
@@ -161,7 +159,6 @@ class Rotator:
             "cooldown": max(0, int(self.cooldowns.get(a["label"], 0) - now)),
         } for i, a in enumerate(self.accounts)]
 
-rotator = Rotator(ACCOUNTS) if ACCOUNTS else None
 
 COMMUNITY_RE = re.compile(r'x\.com/i/communities/(\d{10,25})')
 
