@@ -69,15 +69,29 @@ FRESH_QUERIES = [
 def _build_accounts():
     accounts = []
     for i in range(1, 6):
-        token = os.environ.get(f"ACCOUNT{i}_AUTH_TOKEN")
-        ct0   = os.environ.get(f"ACCOUNT{i}_CT0")
-        if token and ct0 and token not in ("PASTE_HERE", "your_token_here"):
-            accounts.append({"label": f"Account {i}", "auth_token": token, "ct0": ct0})
+        token    = os.environ.get(f"ACCOUNT{i}_AUTH_TOKEN", "").strip()
+        ct0      = os.environ.get(f"ACCOUNT{i}_CT0", "").strip()
+        username = os.environ.get(f"ACCOUNT{i}_USERNAME", "").strip()
+        password = os.environ.get(f"ACCOUNT{i}_PASSWORD", "").strip()
+        email    = os.environ.get(f"ACCOUNT{i}_EMAIL", "").strip()
+        if (token and ct0) or (username and password):
+            accounts.append({
+                "label":      f"Account {i}",
+                "auth_token": token,
+                "ct0":        ct0,
+                "username":   username,
+                "password":   password,
+                "email":      email,
+            })
     if not accounts:
-        t = os.environ.get("AUTH_TOKEN", "")
-        c = os.environ.get("CT0", "")
-        if t and c:
-            accounts.append({"label": "Account 1", "auth_token": t, "ct0": c})
+        accounts = [{
+            "label":      "Account 1",
+            "auth_token": os.environ.get("AUTH_TOKEN", "").strip(),
+            "ct0":        os.environ.get("CT0", "").strip(),
+            "username":   os.environ.get("X_USERNAME", "").strip(),
+            "password":   os.environ.get("X_PASSWORD", "").strip(),
+            "email":      os.environ.get("X_EMAIL", "").strip(),
+        }]
     return accounts
 
 ACCOUNTS = _build_accounts()
@@ -202,23 +216,119 @@ def xapi_search(query, max_results=20):
         return []
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TWIKIT FALLBACK SEARCH
+# TWIKIT LOGIN-BASED CLIENT (more reliable on cloud servers than cookies)
 # ═══════════════════════════════════════════════════════════════════════════════
-async def twikit_search(query):
-    """Search via twikit cookie scraping (fallback)."""
+_twikit_client  = None
+_twikit_ready   = False
+COOKIES_FILE    = "twikit_cookies.json"
+
+async def _init_twikit():
+    """Login with username/password or load saved cookies."""
+    global _twikit_client, _twikit_ready
     if not HAS_TWIKIT or not ACCOUNTS:
-        return []
-    idx = rotator.next()
-    acc = ACCOUNTS[idx]
+        return False
+
+    acc = ACCOUNTS[0]
+    username = acc.get("username", "")
+    password = acc.get("password", "")
+    email    = acc.get("email", "")
+
     c = TwikitClient(language="en-US")
-    c.set_cookies({"auth_token": acc["auth_token"], "ct0": acc["ct0"]})
+
+    # Try saved cookies first (avoids repeated logins)
+    if os.path.exists(COOKIES_FILE):
+        try:
+            c.load_cookies(COOKIES_FILE)
+            # Quick test
+            await c.search_tweet("test", product="Latest")
+            _twikit_client = c
+            _twikit_ready  = True
+            print("[TWIKIT] Loaded saved cookies ✓")
+            return True
+        except Exception:
+            print("[TWIKIT] Saved cookies expired, re-logging in...")
+
+    # Fall back to raw cookies from env
+    if acc.get("auth_token") and acc.get("ct0"):
+        try:
+            c2 = TwikitClient(language="en-US")
+            c2.set_cookies({"auth_token": acc["auth_token"], "ct0": acc["ct0"]})
+            _twikit_client = c2
+            _twikit_ready  = True
+            print("[TWIKIT] Using env cookies ✓")
+            return True
+        except Exception as e:
+            print(f"[TWIKIT] Cookie setup failed: {e}")
+
+    # Try username/password login if credentials provided
+    if username and password:
+        try:
+            await c.login(
+                auth_info_1=username,
+                auth_info_2=email or username,
+                password=password
+            )
+            c.save_cookies(COOKIES_FILE)
+            _twikit_client = c
+            _twikit_ready  = True
+            print("[TWIKIT] Logged in with credentials ✓")
+            return True
+        except Exception as e:
+            print(f"[TWIKIT] Login failed: {e}")
+
+    return False
+
+def ensure_twikit():
+    """Ensure twikit client is ready, blocking until done."""
+    global _twikit_ready
+    if not _twikit_ready:
+        try:
+            result = run_async(_init_twikit())
+            if not result:
+                print("[TWIKIT] Could not initialize — check credentials")
+        except Exception as e:
+            print(f"[TWIKIT] Init error: {e}")
+
+async def twikit_search(query):
+    """Search via twikit."""
+    global _twikit_client, _twikit_ready
+    if not _twikit_ready or not _twikit_client:
+        return []
     try:
-        results = await c.search_tweet(query, product="Latest")
-        return [{"text": getattr(t, "text", "") or "", "author": "", "followers": 0, "created": ""} for t in results]
+        results = await _twikit_client.search_tweet(query, product="Latest")
+        tweets = []
+        for t in results:
+            text = getattr(t, "text", "") or ""
+            # Also grab expanded URLs from tweet entities if available
+            expanded = ""
+            if hasattr(t, "urls") and t.urls:
+                expanded = " ".join(
+                    u.get("expanded_url", "") or u.get("url", "")
+                    for u in (t.urls if isinstance(t.urls, list) else [])
+                )
+            elif hasattr(t, "entities") and t.entities:
+                ents = t.entities if isinstance(t.entities, dict) else {}
+                urls = ents.get("urls", [])
+                expanded = " ".join(u.get("expanded_url", "") or u.get("url", "") for u in urls)
+            full = text + " " + expanded
+            print(f"[DEBUG] tweet: {full[:120]}")
+            tweets.append({
+                "text":      text + " " + expanded,
+                "author":    "",
+                "followers": 0,
+                "created":   ""
+            })
+        return tweets
     except Exception as e:
         err = str(e)
         if '429' in err or 'rate limit' in err.lower():
-            rotator.throttle(idx)
+            if rotator:
+                rotator.throttle(0)
+        elif '32' in err or '401' in err or 'authenticate' in err.lower():
+            print("[TWIKIT] Auth error — cookies may have expired")
+            _twikit_ready = False
+        else:
+            print(f"[TWIKIT] Search error: {e}")
         return []
 
 def search_tweets(query):
@@ -228,6 +338,7 @@ def search_tweets(query):
         print(f"[XAPI] '{query}' → {len(results)} tweets")
         return results
     else:
+        ensure_twikit()
         results = run_async(twikit_search(query))
         print(f"[TWIKIT] '{query}' → {len(results)} tweets")
         return results
@@ -365,9 +476,14 @@ def scan_for_fresh():
 # ═══════════════════════════════════════════════════════════════════════════════
 def scanner_loop():
     global last_scan_at, scans_run
-    mode = "X API v2" if _config["x_bearer"] else "twikit cookies"
+    mode = "X API v2" if _config["x_bearer"] else "twikit"
     ai   = "Claude AI scoring ON" if ANTHROPIC_KEY else "no AI scoring"
     print(f"[SCANNER] Started — {mode} | {ai} | every {SCAN_INTERVAL}s")
+
+    # Pre-initialize twikit before first scan
+    if not _config["x_bearer"]:
+        ensure_twikit()
+
     while True:
         print(f"[SCANNER] Scan #{scans_run + 1}...")
         try:
