@@ -1,15 +1,19 @@
 """
-X Community Scout - Backend
-============================
-Finds brand new X Communities the moment they're created,
-by scanning tweets for community links in real time.
+X Community Scout - v2 (AI Edition)
+=====================================
+Upgrades over v1:
+  - X API v2 (Bearer Token) for reliable tweet search — no more cookie scraping
+  - Falls back to twikit cookies if X API not configured
+  - Claude AI scores every community for relevance + signal quality
+  - Each community gets: score (0-10), signal label, one-line summary
+  - High-score communities (7+) flagged as HOT ALPHA
 
-Deploy on Railway / Render / any VPS.
-Set environment variables:
-  ACCOUNT1_AUTH_TOKEN  — X auth_token cookie
-  ACCOUNT1_CT0         — X ct0 cookie
-  ACCOUNT2_AUTH_TOKEN  — (optional) second account
-  ACCOUNT2_CT0         — (optional) second account
+Environment variables:
+  X_BEARER_TOKEN       — X API v2 Bearer Token (get from developer.twitter.com)
+  ANTHROPIC_API_KEY    — Claude API key
+  ACCOUNT1_AUTH_TOKEN  — X cookie fallback (if no X API)
+  ACCOUNT1_CT0         — X cookie fallback (if no X API)
+  SCAN_INTERVAL        — seconds between scans (default 120)
 """
 
 import asyncio
@@ -18,43 +22,33 @@ import os
 import re
 import time
 import threading
+import requests as req
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from twikit import Client
+
+# ── Optional imports ──────────────────────────────────────────────────
+try:
+    from twikit import Client as TwikitClient
+    HAS_TWIKIT = True
+except ImportError:
+    HAS_TWIKIT = False
+
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ACCOUNTS — loaded from environment variables (safe for deployment)
-# Locally: set them in a .env file or just paste values below for testing
+# CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
-def _build_accounts():
-    accounts = []
-    for i in range(1, 6):  # support up to 5 accounts
-        token = os.environ.get(f"ACCOUNT{i}_AUTH_TOKEN")
-        ct0   = os.environ.get(f"ACCOUNT{i}_CT0")
-        if token and ct0 and token != "your_token_here":
-            accounts.append({
-                "label":      f"Account {i}",
-                "auth_token": token,
-                "ct0":        ct0,
-            })
-    if not accounts:
-        # Fallback for local dev — paste here only, never commit
-        accounts = [{
-            "label":      "Account 1",
-            "auth_token": os.environ.get("AUTH_TOKEN", "PASTE_HERE"),
-            "ct0":        os.environ.get("CT0", "PASTE_HERE"),
-        }]
-    return accounts
-
-ACCOUNTS = _build_accounts()
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# TUNING
-# ═══════════════════════════════════════════════════════════════════════════════
+X_BEARER_TOKEN   = os.environ.get("X_BEARER_TOKEN", "").strip()
+ANTHROPIC_KEY    = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 SCAN_INTERVAL    = int(os.environ.get("SCAN_INTERVAL", 120))
 QUERY_DELAY      = 3
 RATE_LIMIT_PAUSE = 90
-MAX_FEED_SIZE    = 500   # max communities to keep in memory
+MAX_FEED_SIZE    = 500
+HOT_SCORE        = 7    # communities scoring >= this get "HOT ALPHA" flag
 
 FRESH_QUERIES = [
     'just created community x.com/i/communities',
@@ -68,6 +62,23 @@ FRESH_QUERIES = [
     'x.com/i/communities pump',
 ]
 
+# Cookie accounts (fallback if no X API)
+def _build_accounts():
+    accounts = []
+    for i in range(1, 6):
+        token = os.environ.get(f"ACCOUNT{i}_AUTH_TOKEN")
+        ct0   = os.environ.get(f"ACCOUNT{i}_CT0")
+        if token and ct0 and token not in ("PASTE_HERE", "your_token_here"):
+            accounts.append({"label": f"Account {i}", "auth_token": token, "ct0": ct0})
+    if not accounts:
+        t = os.environ.get("AUTH_TOKEN", "")
+        c = os.environ.get("CT0", "")
+        if t and c:
+            accounts.append({"label": "Account 1", "auth_token": t, "ct0": c})
+    return accounts
+
+ACCOUNTS = _build_accounts()
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PERSISTENCE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -76,18 +87,14 @@ SEEN_FILE = "seen_communities.json"
 def _load_json(path, default):
     if os.path.exists(path):
         try:
-            with open(path) as f:
-                return json.load(f)
-        except Exception:
-            pass
+            with open(path) as f: return json.load(f)
+        except: pass
     return default
 
 def _save_json(path, data):
     try:
-        with open(path, "w") as f:
-            json.dump(data, f)
-    except Exception:
-        pass
+        with open(path, "w") as f: json.dump(data, f)
+    except: pass
 
 seen_ids = set(_load_json(SEEN_FILE, []))
 
@@ -99,9 +106,10 @@ scan_lock    = threading.Lock()
 last_scan_at = 0
 scans_run    = 0
 total_found  = 0
+ai_scored    = 0
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ACCOUNT ROTATOR
+# ACCOUNT ROTATOR (cookie fallback)
 # ═══════════════════════════════════════════════════════════════════════════════
 class Rotator:
     def __init__(self, accounts):
@@ -123,11 +131,9 @@ class Rotator:
 
     def throttle(self, idx):
         label = self.accounts[idx]["label"]
-        expiry = time.time() + RATE_LIMIT_PAUSE
-        with self.lock:
-            self.cooldowns[label] = expiry
-            self.idx = (idx + 1) % len(self.accounts)
-        print(f"[ROTATOR] {label} rate limited — {RATE_LIMIT_PAUSE}s cooldown")
+        self.cooldowns[label] = time.time() + RATE_LIMIT_PAUSE
+        self.idx = (idx + 1) % len(self.accounts)
+        print(f"[ROTATOR] {label} cooling down {RATE_LIMIT_PAUSE}s")
 
     def status(self):
         now = time.time()
@@ -138,62 +144,197 @@ class Rotator:
             "cooldown": max(0, int(self.cooldowns.get(a["label"], 0) - now)),
         } for i, a in enumerate(self.accounts)]
 
-rotator = Rotator(ACCOUNTS)
+rotator = Rotator(ACCOUNTS) if ACCOUNTS else None
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
 COMMUNITY_RE = re.compile(r'x\.com/i/communities/(\d{10,25})')
-
-def make_client(idx=None):
-    if idx is None:
-        idx = rotator.next()
-    acc = ACCOUNTS[idx]
-    c = Client(language="en-US")
-    c.set_cookies({"auth_token": acc["auth_token"], "ct0": acc["ct0"]})
-    return c, idx
 
 def run_async(coro):
     loop = asyncio.new_event_loop()
+    try: return loop.run_until_complete(coro)
+    finally: loop.close()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# X API v2 SEARCH (primary method)
+# ═══════════════════════════════════════════════════════════════════════════════
+def xapi_search(query, max_results=20):
+    """Search recent tweets via X API v2 Bearer Token."""
+    if not X_BEARER_TOKEN:
+        return []
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        url = "https://api.twitter.com/2/tweets/search/recent"
+        params = {
+            "query":        query,
+            "max_results":  max_results,
+            "tweet.fields": "text,author_id,created_at,entities",
+            "expansions":   "author_id",
+            "user.fields":  "username,public_metrics",
+        }
+        headers = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
+        r = req.get(url, params=params, headers=headers, timeout=10)
+        if r.status_code == 401:
+            print(f"[XAPI] 401 Unauthorized — falling back to twikit. Check your Bearer Token or tier.")
+            global X_BEARER_TOKEN
+            X_BEARER_TOKEN = ""  # disable X API for rest of session
+            return []
+        if r.status_code == 429:
+            print(f"[XAPI] Rate limited")
+            return []
+        if r.status_code != 200:
+            print(f"[XAPI] Error {r.status_code}: {r.text[:200]}")
+            return []
+        data = r.json()
+        tweets = data.get("data", [])
+        # Build user lookup
+        users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
+        results = []
+        for t in tweets:
+            author = users.get(t.get("author_id", ""), {})
+            results.append({
+                "text":     t.get("text", ""),
+                "author":   author.get("username", "unknown"),
+                "followers":author.get("public_metrics", {}).get("followers_count", 0),
+                "created":  t.get("created_at", ""),
+            })
+        return results
+    except Exception as e:
+        print(f"[XAPI] Exception: {e}")
+        return []
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TWIKIT FALLBACK SEARCH
+# ═══════════════════════════════════════════════════════════════════════════════
+async def twikit_search(query):
+    """Search via twikit cookie scraping (fallback)."""
+    if not HAS_TWIKIT or not ACCOUNTS:
+        return []
+    idx = rotator.next()
+    acc = ACCOUNTS[idx]
+    c = TwikitClient(language="en-US")
+    c.set_cookies({"auth_token": acc["auth_token"], "ct0": acc["ct0"]})
+    try:
+        results = await c.search_tweet(query, product="Latest")
+        return [{"text": getattr(t, "text", "") or "", "author": "", "followers": 0, "created": ""} for t in results]
+    except Exception as e:
+        err = str(e)
+        if '429' in err or 'rate limit' in err.lower():
+            rotator.throttle(idx)
+        return []
+
+def search_tweets(query):
+    """Use X API if available, else twikit."""
+    if X_BEARER_TOKEN:
+        results = xapi_search(query)
+        print(f"[XAPI] '{query}' → {len(results)} tweets")
+        return results
+    else:
+        results = run_async(twikit_search(query))
+        print(f"[TWIKIT] '{query}' → {len(results)} tweets")
+        return results
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLAUDE AI SCORING
+# ═══════════════════════════════════════════════════════════════════════════════
+_anthropic_client = None
+
+def get_anthropic():
+    global _anthropic_client
+    if not HAS_ANTHROPIC or not ANTHROPIC_KEY:
+        return None
+    if not _anthropic_client:
+        _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+    return _anthropic_client
+
+def ai_score_community(tweet_text, source_query, author="", followers=0):
+    """
+    Ask Claude to score a community from 0-10 for memecoin trader relevance.
+    Returns dict with score, label, summary.
+    """
+    global ai_scored
+    client = get_anthropic()
+    if not client:
+        return None
+
+    prompt = f"""You are analyzing an X (Twitter) community link found in a tweet for a memecoin trader.
+
+Tweet text: {tweet_text[:500]}
+Found via query: {source_query}
+Tweet author followers: {followers}
+
+Score this community from 0 to 10 for a memecoin trader based on:
+- How new/fresh it likely is (newer = higher score)
+- How relevant to crypto/memecoin trading
+- Signal quality (is this a real community launch or just noise?)
+- Author credibility (follower count, language used)
+
+Respond in JSON only, no other text:
+{{
+  "score": <0-10 integer>,
+  "label": "<one of: HOT ALPHA | PROMISING | NEUTRAL | LOW SIGNAL>",
+  "summary": "<one sentence: what this community appears to be about>"
+}}"""
+
+    try:
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = msg.content[0].text.strip()
+        # Strip markdown if present
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        result = json.loads(raw)
+        ai_scored += 1
+        return result
+    except Exception as e:
+        print(f"[AI] Scoring error: {e}")
+        return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CORE SCAN
 # ═══════════════════════════════════════════════════════════════════════════════
-async def scan_for_fresh():
+def scan_for_fresh():
     global total_found
 
-    c, idx = make_client()
-    found_ids = set()
+    found_ids    = set()
     new_this_scan = []
 
     for query in FRESH_QUERIES:
         try:
-            results = await c.search_tweet(query, product="Latest")
-            print(f"[SCAN] '{query}' → {len(results)} tweets")
+            tweets = search_tweets(query)
 
-            for tweet in results:
-                text = getattr(tweet, "text", "") or ""
-                urls = []
-                if hasattr(tweet, "urls") and tweet.urls:
-                    urls = [u.get("expanded_url", "") or u.get("url", "")
-                            for u in tweet.urls]
-                full = text + " " + " ".join(urls)
+            for tweet_data in tweets:
+                text      = tweet_data.get("text", "")
+                author    = tweet_data.get("author", "")
+                followers = tweet_data.get("followers", 0)
 
-                for cid in COMMUNITY_RE.findall(full):
+                for cid in COMMUNITY_RE.findall(text):
                     if cid in found_ids or cid in seen_ids:
                         continue
                     found_ids.add(cid)
 
+                    # AI scoring (async in background thread to not block scan)
+                    ai = None
+                    if ANTHROPIC_KEY:
+                        ai = ai_score_community(text, query, author, followers)
+
+                    score   = ai.get("score", 5) if ai else None
+                    label   = ai.get("label", "") if ai else ""
+                    summary = ai.get("summary", "") if ai else ""
+                    is_hot  = score is not None and score >= HOT_SCORE
+
                     community = {
-                        "id":          cid,
-                        "url":         f"https://x.com/i/communities/{cid}",
-                        "tweet":       text[:280],
-                        "found_at":    int(time.time()),
-                        "source":      query.split(' x.com')[0][:40],
+                        "id":       cid,
+                        "url":      f"https://x.com/i/communities/{cid}",
+                        "tweet":    text[:280],
+                        "author":   author,
+                        "followers":followers,
+                        "found_at": int(time.time()),
+                        "source":   query.split(' x.com')[0][:40],
+                        # AI fields
+                        "score":    score,
+                        "label":    label,
+                        "summary":  summary,
+                        "is_hot":   is_hot,
                     }
 
                     seen_ids.add(cid)
@@ -203,26 +344,18 @@ async def scan_for_fresh():
                         existing = {d["id"] for d in discoveries}
                         if cid not in existing:
                             discoveries.insert(0, community)
-                            # Cap feed size
                             if len(discoveries) > MAX_FEED_SIZE:
                                 discoveries.pop()
                             total_found += 1
 
                     new_this_scan.append(community)
-                    print(f"[NEW] {cid} via '{community['source']}'")
+                    score_str = f" [AI:{score}/10 {label}]" if score is not None else ""
+                    print(f"[NEW] {cid}{score_str}")
 
         except Exception as e:
-            err = str(e)
-            if '429' in err or 'rate limit' in err.lower():
-                rotator.throttle(idx)
-                c, idx = make_client()
-                await asyncio.sleep(5)
-            elif '404' in err:
-                pass  # query not supported, skip silently
-            else:
-                print(f"[SCAN] Error on '{query}': {e}")
+            print(f"[SCAN] Error on '{query}': {e}")
 
-        await asyncio.sleep(QUERY_DELAY)
+        time.sleep(QUERY_DELAY)
 
     return new_this_scan
 
@@ -231,14 +364,17 @@ async def scan_for_fresh():
 # ═══════════════════════════════════════════════════════════════════════════════
 def scanner_loop():
     global last_scan_at, scans_run
-    print(f"[SCANNER] Started — scanning every {SCAN_INTERVAL}s with {len(ACCOUNTS)} account(s)")
+    mode = "X API v2" if X_BEARER_TOKEN else "twikit cookies"
+    ai   = "Claude AI scoring ON" if ANTHROPIC_KEY else "no AI scoring"
+    print(f"[SCANNER] Started — {mode} | {ai} | every {SCAN_INTERVAL}s")
     while True:
-        print(f"[SCANNER] Scan #{scans_run + 1} starting...")
+        print(f"[SCANNER] Scan #{scans_run + 1}...")
         try:
-            found = run_async(scan_for_fresh())
+            found        = scan_for_fresh()
             scans_run   += 1
             last_scan_at = int(time.time())
-            print(f"[SCANNER] Scan #{scans_run} done — {len(found)} new, {total_found} total")
+            hot          = sum(1 for c in found if c.get("is_hot"))
+            print(f"[SCANNER] Done — {len(found)} new ({hot} hot), {total_found} total, {ai_scored} AI scored")
         except Exception as e:
             print(f"[SCANNER] Error: {e}")
         time.sleep(SCAN_INTERVAL)
@@ -253,36 +389,44 @@ CORS(app)
 
 @app.route("/")
 def index():
-    return jsonify({"name": "X Community Scout API", "status": "ok", "version": "1.0"})
+    return jsonify({"name": "X Community Scout API", "status": "ok", "version": "2.0"})
 
 @app.route("/api/health")
 def health():
-    accs = rotator.status()
+    accs = rotator.status() if rotator else []
     return jsonify({
         "status":      "ok",
+        "version":     "2.0",
+        "mode":        "xapi" if X_BEARER_TOKEN else "twikit",
+        "ai_scoring":  bool(ANTHROPIC_KEY),
         "scans_run":   scans_run,
         "total_found": total_found,
+        "ai_scored":   ai_scored,
         "discoveries": len(discoveries),
         "last_scan":   last_scan_at,
         "next_scan":   max(0, int(last_scan_at + SCAN_INTERVAL - time.time())),
         "accounts":    accs,
-        "all_limited": all(a["limited"] for a in accs),
+        "all_limited": all(a["limited"] for a in accs) if accs else False,
     })
 
 @app.route("/api/discoveries")
 def get_discoveries():
-    limit      = min(int(request.args.get("limit", 100)), 500)
-    since      = int(request.args.get("since", 0))   # unix timestamp — only return newer
-    sort       = request.args.get("sort", "newest")
+    limit    = min(int(request.args.get("limit", 100)), 500)
+    since    = int(request.args.get("since", 0))
+    sort     = request.args.get("sort", "newest")
+    hot_only = request.args.get("hot_only", "false").lower() == "true"
 
     with scan_lock:
         data = list(discoveries)
 
     if since:
         data = [c for c in data if c["found_at"] > since]
-
+    if hot_only:
+        data = [c for c in data if c.get("is_hot")]
     if sort == "oldest":
         data.sort(key=lambda x: x["found_at"])
+    elif sort == "score":
+        data.sort(key=lambda x: x.get("score") or 0, reverse=True)
 
     return jsonify({"data": data[:limit], "total": len(data), "server_time": int(time.time())})
 
@@ -298,7 +442,7 @@ def scan_now():
     def _run():
         global last_scan_at, scans_run
         try:
-            found = run_async(scan_for_fresh())
+            found        = scan_for_fresh()
             scans_run   += 1
             last_scan_at = int(time.time())
         except Exception as e:
@@ -309,65 +453,86 @@ def scan_now():
 @app.route("/api/communities")
 def search_communities():
     keyword = request.args.get("q", "memecoin")
-    async def _search():
-        c, idx = make_client()
-        try:
-            results = await c.search_community(keyword)
-        except Exception as e:
-            err = str(e)
-            if '429' in err or 'rate limit' in err.lower():
-                rotator.throttle(idx)
-            return []
+    if X_BEARER_TOKEN:
+        # Use X API
+        tweets = xapi_search(f"x.com/i/communities {keyword}", max_results=20)
         found = []
-        for item in results:
-            cid = str(getattr(item, "id", ""))
-            found.append({
-                "id":          cid,
-                "name":        getattr(item, "name", "Unknown"),
-                "description": getattr(item, "description", ""),
-                "member_count":getattr(item, "member_count", 0),
-                "url":         f"https://x.com/i/communities/{cid}",
-                "found_at":    int(time.time()),
-                "source":      keyword,
-                "tweet":       "",
-            })
-        return sorted(found, key=lambda x: x.get("member_count") or 0)
-    try:
-        data = run_async(_search())
-        return jsonify({"data": data, "total": len(data)})
-    except Exception as e:
-        return jsonify({"error": str(e), "data": []}), 500
+        seen = set()
+        for t in tweets:
+            for cid in COMMUNITY_RE.findall(t["text"]):
+                if cid in seen: continue
+                seen.add(cid)
+                ai = ai_score_community(t["text"], keyword, t["author"], t["followers"]) if ANTHROPIC_KEY else None
+                found.append({
+                    "id":      cid,
+                    "url":     f"https://x.com/i/communities/{cid}",
+                    "tweet":   t["text"][:280],
+                    "author":  t["author"],
+                    "found_at":int(time.time()),
+                    "source":  keyword,
+                    "score":   ai.get("score") if ai else None,
+                    "label":   ai.get("label", "") if ai else "",
+                    "summary": ai.get("summary", "") if ai else "",
+                    "is_hot":  (ai.get("score", 0) >= HOT_SCORE) if ai else False,
+                })
+        return jsonify({"data": found, "total": len(found)})
+    else:
+        # Twikit fallback
+        async def _search():
+            if not HAS_TWIKIT or not ACCOUNTS: return []
+            idx = rotator.next()
+            acc = ACCOUNTS[idx]
+            c = TwikitClient(language="en-US")
+            c.set_cookies({"auth_token": acc["auth_token"], "ct0": acc["ct0"]})
+            try:
+                results = await c.search_community(keyword)
+            except Exception as e:
+                if '429' in str(e): rotator.throttle(idx)
+                return []
+            found = []
+            for item in results:
+                cid = str(getattr(item, "id", ""))
+                found.append({
+                    "id":          cid,
+                    "name":        getattr(item, "name", "Unknown"),
+                    "description": getattr(item, "description", ""),
+                    "member_count":getattr(item, "member_count", 0),
+                    "url":         f"https://x.com/i/communities/{cid}",
+                    "found_at":    int(time.time()),
+                    "source":      keyword,
+                    "tweet":       "",
+                    "score":       None,
+                    "label":       "",
+                    "summary":     "",
+                    "is_hot":      False,
+                })
+            return sorted(found, key=lambda x: x.get("member_count") or 0)
+        try:
+            data = run_async(_search())
+            return jsonify({"data": data, "total": len(data)})
+        except Exception as e:
+            return jsonify({"error": str(e), "data": []}), 500
 
 @app.route("/api/trending-hashtags")
 def trending_hashtags():
     keywords = request.args.get("keywords", "memecoin,solana").split(",")
-    async def _fetch():
-        c, idx = make_client()
-        counts = {}
-        for kw in keywords[:2]:
-            try:
-                results = await c.search_tweet(
-                    f"#{kw.strip()} lang:en -is:retweet", product="Latest")
-                for tweet in results:
-                    for word in (getattr(tweet, "text", "") or "").split():
-                        if word.startswith("#") and len(word) > 3:
-                            tag = word.strip("#.,!?()[]").lower()
-                            if tag:
-                                counts[tag] = counts.get(tag, 0) + 1
-            except Exception as e:
-                err = str(e)
-                if '429' in err or 'rate limit' in err.lower():
-                    rotator.throttle(idx)
-                    break
-        return [{"tag": f"#{t}", "count": n}
-                for t, n in sorted(counts.items(), key=lambda x: x[1], reverse=True)[:20]]
-    try:
-        return jsonify({"data": run_async(_fetch())})
-    except Exception as e:
-        return jsonify({"error": str(e), "data": []}), 500
+    counts = {}
+    for kw in keywords[:3]:
+        tweets = search_tweets(f"#{kw.strip()} lang:en -is:retweet")
+        for t in tweets:
+            for word in t["text"].split():
+                if word.startswith("#") and len(word) > 3:
+                    tag = word.strip("#.,!?()[]").lower()
+                    if tag: counts[tag] = counts.get(tag, 0) + 1
+    data = [{"tag": f"#{t}", "count": n}
+            for t, n in sorted(counts.items(), key=lambda x: x[1], reverse=True)[:20]]
+    return jsonify({"data": data})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"\n🚀 X Community Scout running on port {port}")
-    print(f"   Accounts: {len(ACCOUNTS)} | Scan interval: {SCAN_INTERVAL}s\n")
+    print(f"\n🚀 X Community Scout v2")
+    print(f"   Mode:       {'X API v2' if X_BEARER_TOKEN else 'twikit cookies'}")
+    print(f"   AI Scoring: {'ON (Claude)' if ANTHROPIC_KEY else 'OFF'}")
+    print(f"   Accounts:   {len(ACCOUNTS)}")
+    print(f"   Port:       {port}\n")
     app.run(host="0.0.0.0", debug=False, port=port)
