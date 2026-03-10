@@ -2,3 +2,5 @@ flask==3.0.3
 flask-cors==4.0.1
 twikit==2.3.3
 gunicorn==22.0.0
+anthropic>=0.25.0
+requests>=2.31.0

@@ -142,7 +142,13 @@
   .badge-time { background:transparent; border:1px solid var(--border); color:var(--muted); }
   .badge-src  { background:rgba(123,97,255,0.08); border:1px solid rgba(123,97,255,0.2); color:var(--accent3); }
   .badge-new  { background:rgba(0,245,196,0.08); border:1px solid rgba(0,245,196,0.2); color:var(--accent); animation: subtle-pulse 2s ease infinite; }
+  .badge-hot  { background:rgba(255,61,110,0.12); border:1px solid rgba(255,61,110,0.4); color:var(--accent2); animation: subtle-pulse 1.2s ease infinite; }
+  .badge-promise { background:rgba(245,196,0,0.1); border:1px solid rgba(245,196,0,0.3); color:var(--yellow); }
+  .badge-score { background:rgba(123,97,255,0.08); border:1px solid rgba(123,97,255,0.2); color:var(--accent3); }
   @keyframes subtle-pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+  .card.hot-alpha { border-color:rgba(255,61,110,0.35) !important; }
+  .card.hot-alpha::before { background:var(--accent2) !important; }
+  .card-summary { font-size:11px; color:var(--accent); font-family:'Space Mono',monospace; margin-bottom:8px; padding:5px 10px; background:rgba(0,245,196,0.05); border-left:2px solid var(--accent); border-radius:0 4px 4px 0; line-height:1.5; }
 
   .card-tweet { font-size:12px; color:var(--muted); line-height:1.65; margin-bottom:10px; }
   .card-foot  { display:flex; align-items:center; justify-content:space-between; padding-top:10px; border-top:1px solid var(--border); }
@@ -221,11 +227,56 @@
     </div>
   </header>
 
+  <!-- CA Banner -->
+  <div id="caBanner" style="
+    background: rgba(0,245,196,0.05);
+    border: 1px solid rgba(0,245,196,0.2);
+    border-radius: 12px;
+    padding: 12px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    text-align: center;
+  ">
+    <span style="font-size:13px;color:var(--muted);font-family:'Space Mono',monospace;">$SCOUT</span>
+    <span id="caText" style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);letter-spacing:0.5px;">
+      PASTE_CONTRACT_ADDRESS_HERE
+    </span>
+    <button onclick="copyCA()" style="
+      background: rgba(0,245,196,0.1);
+      border: 1px solid rgba(0,245,196,0.25);
+      border-radius: 6px;
+      padding: 4px 12px;
+      color: var(--accent);
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      cursor: pointer;
+    ">Copy CA</button>
+    <a href="https://pump.fun" target="_blank" style="
+      background: var(--accent);
+      border: none;
+      border-radius: 6px;
+      padding: 5px 14px;
+      color: var(--bg);
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 12px;
+      text-decoration: none;
+    ">Buy $SCOUT ↗</a>
+  </div>
+
   <!-- Stats -->
   <div class="stats-row">
     <div class="stat">
       <div class="stat-label">🔴 Live Feed</div>
       <div class="stat-value" id="statDisc">—</div>
+    </div>
+    <div class="stat" style="border-color:rgba(255,61,110,0.25);">
+      <div class="stat-label">🔥 Hot Alpha</div>
+      <div class="stat-value" id="statHot" style="color:var(--accent2)">—</div>
     </div>
     <div class="stat s2">
       <div class="stat-label">Total Found</div>
@@ -263,8 +314,12 @@
           <div class="toggle" id="recentToggle" onclick="toggleRecent()">
             <div class="dot"></div> Last 30 min only
           </div>
+          <div class="toggle" id="hotToggle" onclick="toggleHot()">
+            <div class="dot"></div> 🔥 Hot Alpha only
+          </div>
           <select class="sel" id="sortSel" onchange="renderFeed()">
             <option value="newest">🕐 Newest first</option>
+            <option value="score">🔥 Highest score</option>
             <option value="oldest">Oldest first</option>
           </select>
         </div>
@@ -356,12 +411,21 @@
 <div class="toast" id="toast"></div>
 
 <script>
+function copyCA() {
+  const ca = document.getElementById('caText').textContent.trim();
+  navigator.clipboard.writeText(ca);
+  const btn = event.target;
+  btn.textContent = 'Copied!';
+  setTimeout(() => btn.textContent = 'Copy CA', 2000);
+}
+
 // ── Config ────────────────────────────────────────────────────────────
 // Change this to your deployed backend URL
-const API_BASE = window.API_BASE || 'http://localhost:5000';
+const API_BASE = window.API_BASE || 'https://web-production-a434d.up.railway.app';
 
 let allData        = [];
 let showRecent     = false;
+let showHotOnly    = false;
 let lastNewCount   = 0;
 
 // ── Init ──────────────────────────────────────────────────────────────
@@ -403,7 +467,9 @@ async function loadFeed() {
     const r = await fetch(`${API_BASE}/api/discoveries?limit=200`);
     const d = await r.json();
     allData = d.data || [];
+    const hot = allData.filter(c => c.is_hot).length;
     document.getElementById('statDisc').textContent = allData.length;
+    document.getElementById('statHot').textContent  = hot || '—';
     renderFeed();
   } catch {}
 }
@@ -412,38 +478,58 @@ function renderFeed() {
   const sort = document.getElementById('sortSel').value;
   let list   = [...allData];
 
-  if (showRecent) {
-    const cut = Date.now()/1000 - 1800;
-    list = list.filter(c => c.found_at >= cut);
-  }
+  if (showRecent)  { const cut = Date.now()/1000 - 1800; list = list.filter(c => c.found_at >= cut); }
+  if (showHotOnly) { list = list.filter(c => c.is_hot); }
+
   if (sort === 'oldest') list.sort((a,b) => a.found_at - b.found_at);
+  else if (sort === 'score') list.sort((a,b) => (b.score||0) - (a.score||0));
 
   const el = document.getElementById('liveFeed');
   if (!list.length) {
-    el.innerHTML = `<div class="empty"><div class="empty-icon">📡</div><h3>${showRecent ? 'Nothing in the last 30 minutes' : 'Feed is empty'}</h3><p>Hit Scan Now to find communities immediately, or wait for the auto-scan.</p></div>`;
+    const msg = showHotOnly ? 'No Hot Alpha communities yet — AI scoring builds up over time'
+              : showRecent  ? 'Nothing in the last 30 minutes'
+              : 'Feed is empty';
+    el.innerHTML = `<div class="empty"><div class="empty-icon">📡</div><h3>${msg}</h3><p>Hit Scan Now to find communities immediately.</p></div>`;
     return;
   }
   el.innerHTML = list.map((c,i) => cardHTML(c,i)).join('');
 }
 
 function cardHTML(c, i) {
-  const ago     = timeAgo(c.found_at);
-  const src     = (c.source||'').replace('x.com/i/communities ','').trim();
-  const isNew   = (Date.now()/1000 - c.found_at) < 300; // less than 5 min
-  const newBadge = isNew ? `<span class="badge badge-new">🆕 Just found</span>` : '';
-  const tweet   = c.tweet || '';
+  const ago    = timeAgo(c.found_at);
+  const src    = (c.source||'').replace('x.com/i/communities ','').trim();
+  const isNew  = (Date.now()/1000 - c.found_at) < 300;
+  const isHot  = c.is_hot;
+  const score  = c.score;
+  const label  = c.label || '';
+  const summary= c.summary || '';
+  const tweet  = c.tweet || '';
+
+  // Score badge
+  let scoreBadge = '';
+  if (score !== null && score !== undefined) {
+    if (isHot)            scoreBadge = `<span class="badge badge-hot">🔥 HOT ALPHA ${score}/10</span>`;
+    else if (score >= 5)  scoreBadge = `<span class="badge badge-promise">⚡ ${score}/10</span>`;
+    else                  scoreBadge = `<span class="badge badge-score">${score}/10</span>`;
+  }
+
+  const newBadge  = (!isHot && isNew) ? `<span class="badge badge-new">🆕 Just found</span>` : '';
+  const timeBadge = `<span class="badge badge-time">${ago}</span>`;
+  const srcBadge  = src ? `<span class="badge badge-src">${esc(src)}</span>` : '';
+
+  // Author badge if we have follower count
+  const authorBadge = c.followers > 1000
+    ? `<span class="badge badge-score">👤 ${fmtNum(c.followers)}</span>`
+    : '';
 
   return `
-    <div class="card" style="animation-delay:${Math.min(i*0.03,0.5)}s">
+    <div class="card ${isHot ? 'hot-alpha' : ''}" style="animation-delay:${Math.min(i*0.03,0.5)}s">
       <div class="card-head">
-        <div class="card-id">Community ${c.id.slice(-10)}</div>
-        <div class="card-badges">
-          ${newBadge}
-          <span class="badge badge-time">${ago}</span>
-          ${src ? `<span class="badge badge-src">${esc(src)}</span>` : ''}
-        </div>
+        <div class="card-id">Community …${c.id.slice(-10)}</div>
+        <div class="card-badges">${scoreBadge}${newBadge}${timeBadge}${authorBadge}${srcBadge}</div>
       </div>
-      ${tweet ? `<div class="card-tweet">${esc(tweet.substring(0,220))}</div>` : ''}
+      ${summary ? `<div class="card-summary">🤖 ${esc(summary)}</div>` : ''}
+      ${tweet ? `<div class="card-tweet">${esc(tweet.substring(0,200))}</div>` : ''}
       <div class="card-foot">
         <div class="card-rawid">${c.id}</div>
         <a class="card-open" href="${c.url}" target="_blank" onclick="event.stopPropagation()">Open on X ↗</a>
@@ -479,6 +565,12 @@ async function clearFeed() {
 function toggleRecent() {
   showRecent = !showRecent;
   document.getElementById('recentToggle').classList.toggle('on', showRecent);
+  renderFeed();
+}
+
+function toggleHot() {
+  showHotOnly = !showHotOnly;
+  document.getElementById('hotToggle').classList.toggle('on', showHotOnly);
   renderFeed();
 }
 
@@ -552,6 +644,12 @@ async function loadHashtags() {
 function setHt(id, html) { const e = document.getElementById(id); if(e) e.innerHTML = html; }
 
 // ── Utils ─────────────────────────────────────────────────────────────
+function fmtNum(n) {
+  if (!n) return '0';
+  if (n >= 1000000) return (n/1000000).toFixed(1)+'M';
+  if (n >= 1000)    return (n/1000).toFixed(1)+'K';
+  return String(n);
+}
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function timeAgo(ts) {
   const d = Math.round(Date.now()/1000 - ts);
