@@ -44,6 +44,9 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 X_BEARER_TOKEN   = os.environ.get("X_BEARER_TOKEN", "").strip()
 ANTHROPIC_KEY    = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+
+# Mutable config so we can disable X API at runtime without global keyword
+_config = {"x_bearer": X_BEARER_TOKEN}
 SCAN_INTERVAL    = int(os.environ.get("SCAN_INTERVAL", 120))
 QUERY_DELAY      = 3
 RATE_LIMIT_PAUSE = 90
@@ -158,7 +161,7 @@ def run_async(coro):
 # ═══════════════════════════════════════════════════════════════════════════════
 def xapi_search(query, max_results=20):
     """Search recent tweets via X API v2 Bearer Token."""
-    if not X_BEARER_TOKEN:
+    if not _config["x_bearer"]:
         return []
     try:
         url = "https://api.twitter.com/2/tweets/search/recent"
@@ -169,12 +172,11 @@ def xapi_search(query, max_results=20):
             "expansions":   "author_id",
             "user.fields":  "username,public_metrics",
         }
-        headers = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
+        headers = {"Authorization": f"Bearer {_config['x_bearer']}"}
         r = req.get(url, params=params, headers=headers, timeout=10)
         if r.status_code == 401:
-            global X_BEARER_TOKEN
-            print(f"[XAPI] 401 Unauthorized — falling back to twikit.")
-            X_BEARER_TOKEN = ""
+            print(f"[XAPI] 401 Unauthorized — disabling X API, falling back to twikit.")
+            _config["x_bearer"] = ""
             return []
         if r.status_code == 429:
             print(f"[XAPI] Rate limited")
@@ -184,16 +186,15 @@ def xapi_search(query, max_results=20):
             return []
         data = r.json()
         tweets = data.get("data", [])
-        # Build user lookup
         users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
         results = []
         for t in tweets:
             author = users.get(t.get("author_id", ""), {})
             results.append({
-                "text":     t.get("text", ""),
-                "author":   author.get("username", "unknown"),
-                "followers":author.get("public_metrics", {}).get("followers_count", 0),
-                "created":  t.get("created_at", ""),
+                "text":      t.get("text", ""),
+                "author":    author.get("username", "unknown"),
+                "followers": author.get("public_metrics", {}).get("followers_count", 0),
+                "created":   t.get("created_at", ""),
             })
         return results
     except Exception as e:
@@ -222,7 +223,7 @@ async def twikit_search(query):
 
 def search_tweets(query):
     """Use X API if available, else twikit."""
-    if X_BEARER_TOKEN:
+    if _config["x_bearer"]:
         results = xapi_search(query)
         print(f"[XAPI] '{query}' → {len(results)} tweets")
         return results
@@ -364,7 +365,7 @@ def scan_for_fresh():
 # ═══════════════════════════════════════════════════════════════════════════════
 def scanner_loop():
     global last_scan_at, scans_run
-    mode = "X API v2" if X_BEARER_TOKEN else "twikit cookies"
+    mode = "X API v2" if _config["x_bearer"] else "twikit cookies"
     ai   = "Claude AI scoring ON" if ANTHROPIC_KEY else "no AI scoring"
     print(f"[SCANNER] Started — {mode} | {ai} | every {SCAN_INTERVAL}s")
     while True:
@@ -397,7 +398,7 @@ def health():
     return jsonify({
         "status":      "ok",
         "version":     "2.0",
-        "mode":        "xapi" if X_BEARER_TOKEN else "twikit",
+        "mode":        "xapi" if _config["x_bearer"] else "twikit",
         "ai_scoring":  bool(ANTHROPIC_KEY),
         "scans_run":   scans_run,
         "total_found": total_found,
@@ -453,7 +454,7 @@ def scan_now():
 @app.route("/api/communities")
 def search_communities():
     keyword = request.args.get("q", "memecoin")
-    if X_BEARER_TOKEN:
+    if _config["x_bearer"]:
         # Use X API
         tweets = xapi_search(f"x.com/i/communities {keyword}", max_results=20)
         found = []
@@ -531,7 +532,7 @@ def trending_hashtags():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"\n🚀 X Community Scout v2")
-    print(f"   Mode:       {'X API v2' if X_BEARER_TOKEN else 'twikit cookies'}")
+    print(f"   Mode:       {'X API v2' if _config["x_bearer"] else 'twikit cookies'}")
     print(f"   AI Scoring: {'ON (Claude)' if ANTHROPIC_KEY else 'OFF'}")
     print(f"   Accounts:   {len(ACCOUNTS)}")
     print(f"   Port:       {port}\n")
