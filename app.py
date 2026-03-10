@@ -172,9 +172,9 @@ def xapi_search(query, max_results=20):
         headers = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
         r = req.get(url, params=params, headers=headers, timeout=10)
         if r.status_code == 401:
-            print(f"[XAPI] 401 Unauthorized — falling back to twikit. Check your Bearer Token or tier.")
             global X_BEARER_TOKEN
-            X_BEARER_TOKEN = ""  # disable X API for rest of session
+            print(f"[XAPI] 401 Unauthorized — falling back to twikit.")
+            X_BEARER_TOKEN = ""
             return []
         if r.status_code == 429:
             print(f"[XAPI] Rate limited")
