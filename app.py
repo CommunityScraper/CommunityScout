@@ -54,15 +54,15 @@ MAX_FEED_SIZE    = 500
 HOT_SCORE        = 7    # communities scoring >= this get "HOT ALPHA" flag
 
 FRESH_QUERIES = [
-    'just created community x.com/i/communities',
-    'new community x.com/i/communities memecoin',
-    'new community x.com/i/communities crypto',
-    'community is live x.com/i/communities',
-    'join my community x.com/i/communities',
-    'created a community x.com/i/communities',
     'x.com/i/communities memecoin',
     'x.com/i/communities solana',
-    'x.com/i/communities pump',
+    'x.com/i/communities pump.fun',
+    'x.com/i/communities crypto token',
+    'x.com/i/communities coin',
+    'just created community x.com/i/communities crypto',
+    'new community x.com/i/communities memecoin',
+    'x.com/i/communities trading',
+    'x.com/i/communities defi',
 ]
 
 # Cookie accounts (fallback if no X API)
@@ -311,7 +311,6 @@ async def twikit_search(query):
                 urls = ents.get("urls", [])
                 expanded = " ".join(u.get("expanded_url", "") or u.get("url", "") for u in urls)
             full = text + " " + expanded
-            print(f"[DEBUG] tweet: {full[:120]}")
             tweets.append({
                 "text":      text + " " + expanded,
                 "author":    "",
