@@ -56,10 +56,10 @@ HOT_SCORE        = 7    # communities scoring >= this get "HOT ALPHA" flag
 FRESH_QUERIES = [
     'x.com/i/communities memecoin',
     'x.com/i/communities solana',
-    'x.com/i/communities pump.fun',
+    'x.com/i/communities pumpfun',
     'x.com/i/communities crypto token',
     'x.com/i/communities coin',
-    'just created community x.com/i/communities crypto',
+    'created community x.com/i/communities crypto',
     'new community x.com/i/communities memecoin',
     'x.com/i/communities trading',
     'x.com/i/communities defi',
@@ -167,8 +167,15 @@ COMMUNITY_RE = re.compile(r'x\.com/i/communities/(\d{10,25})')
 
 def run_async(coro):
     loop = asyncio.new_event_loop()
-    try: return loop.run_until_complete(coro)
-    finally: loop.close()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.close()
+        except Exception:
+            pass
+        asyncio.set_event_loop(None)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # X API v2 SEARCH (primary method)
@@ -290,16 +297,17 @@ def ensure_twikit():
             print(f"[TWIKIT] Init error: {e}")
 
 async def twikit_search(query):
-    """Search via twikit."""
-    global _twikit_client, _twikit_ready
-    if not _twikit_ready or not _twikit_client:
+    """Search via twikit — fresh client per call to avoid stale event loop."""
+    if not HAS_TWIKIT or not ACCOUNTS:
         return []
+    acc = ACCOUNTS[0]
     try:
-        results = await _twikit_client.search_tweet(query, product="Latest")
+        c = TwikitClient(language="en-US")
+        c.set_cookies({"auth_token": acc["auth_token"], "ct0": acc["ct0"]})
+        results = await c.search_tweet(query, product="Latest")
         tweets = []
         for t in results:
             text = getattr(t, "text", "") or ""
-            # Also grab expanded URLs from tweet entities if available
             expanded = ""
             if hasattr(t, "urls") and t.urls:
                 expanded = " ".join(
@@ -310,22 +318,14 @@ async def twikit_search(query):
                 ents = t.entities if isinstance(t.entities, dict) else {}
                 urls = ents.get("urls", [])
                 expanded = " ".join(u.get("expanded_url", "") or u.get("url", "") for u in urls)
-            full = text + " " + expanded
-            tweets.append({
-                "text":      text + " " + expanded,
-                "author":    "",
-                "followers": 0,
-                "created":   ""
-            })
+            tweets.append({"text": text + " " + expanded, "author": "", "followers": 0, "created": ""})
         return tweets
     except Exception as e:
         err = str(e)
         if '429' in err or 'rate limit' in err.lower():
-            if rotator:
-                rotator.throttle(0)
-        elif '32' in err or '401' in err or 'authenticate' in err.lower():
-            print("[TWIKIT] Auth error — cookies may have expired")
-            _twikit_ready = False
+            if rotator: rotator.throttle(0)
+        elif '404' in err:
+            pass
         else:
             print(f"[TWIKIT] Search error: {e}")
         return []
