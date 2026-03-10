@@ -59,10 +59,6 @@ FRESH_QUERIES = [
     'x.com/i/communities pumpfun',
     'x.com/i/communities crypto token',
     'x.com/i/communities coin',
-    'created community x.com/i/communities crypto',
-    'new community x.com/i/communities memecoin',
-    'x.com/i/communities trading',
-    'x.com/i/communities defi',
 ]
 
 # Cookie accounts (fallback if no X API)
@@ -177,7 +173,7 @@ def run_async(coro):
 # ═══════════════════════════════════════════════════════════════════════════════
 # X API v2 SEARCH (primary method)
 # ═══════════════════════════════════════════════════════════════════════════════
-def xapi_search(query, max_results=20):
+def xapi_search(query, max_results=10):
     """Search recent tweets via X API v2 Bearer Token."""
     if not _config["x_bearer"]:
         return []
@@ -208,8 +204,18 @@ def xapi_search(query, max_results=20):
         results = []
         for t in tweets:
             author = users.get(t.get("author_id", ""), {})
+            text   = t.get("text", "")
+            # Extract expanded URLs from entities
+            expanded = ""
+            entities = t.get("entities", {}) or {}
+            urls = entities.get("urls", [])
+            if urls:
+                expanded = " ".join(
+                    u.get("expanded_url", "") or u.get("url", "")
+                    for u in urls
+                )
             results.append({
-                "text":      t.get("text", ""),
+                "text":      text + " " + expanded,
                 "author":    author.get("username", "unknown"),
                 "followers": author.get("public_metrics", {}).get("followers_count", 0),
                 "created":   t.get("created_at", ""),
