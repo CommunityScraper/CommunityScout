@@ -403,10 +403,28 @@ Respond in JSON only, no other text:
 # ═══════════════════════════════════════════════════════════════════════════════
 # CORE SCAN
 # ═══════════════════════════════════════════════════════════════════════════════
+def score_community_background(community):
+    """Score a single community with Claude in a background thread."""
+    ai = ai_score_community(
+        community["tweet"], community["source"],
+        community.get("author", ""), community.get("followers", 0)
+    )
+    if ai:
+        community["score"]   = ai.get("score")
+        community["label"]   = ai.get("label", "")
+        community["summary"] = ai.get("summary", "")
+        community["is_hot"]  = (ai.get("score", 0) >= HOT_SCORE)
+        score = ai.get("score")
+        label = ai.get("label", "")
+        print(f"[AI] {community['id']} → {score}/10 {label}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CORE SCAN
+# ═══════════════════════════════════════════════════════════════════════════════
 def scan_for_fresh():
     global total_found
 
-    found_ids    = set()
+    found_ids     = set()
     new_this_scan = []
 
     for query in FRESH_QUERIES:
@@ -423,16 +441,7 @@ def scan_for_fresh():
                         continue
                     found_ids.add(cid)
 
-                    # AI scoring (async in background thread to not block scan)
-                    ai = None
-                    if ANTHROPIC_KEY:
-                        ai = ai_score_community(text, query, author, followers)
-
-                    score   = ai.get("score", 5) if ai else None
-                    label   = ai.get("label", "") if ai else ""
-                    summary = ai.get("summary", "") if ai else ""
-                    is_hot  = score is not None and score >= HOT_SCORE
-
+                    # Add community immediately with no score yet
                     community = {
                         "id":       cid,
                         "url":      f"https://x.com/i/communities/{cid}",
@@ -441,11 +450,10 @@ def scan_for_fresh():
                         "followers":followers,
                         "found_at": int(time.time()),
                         "source":   query.split(' x.com')[0][:40],
-                        # AI fields
-                        "score":    score,
-                        "label":    label,
-                        "summary":  summary,
-                        "is_hot":   is_hot,
+                        "score":    None,
+                        "label":    "Scoring...",
+                        "summary":  "",
+                        "is_hot":   False,
                     }
 
                     seen_ids.add(cid)
@@ -460,8 +468,15 @@ def scan_for_fresh():
                             total_found += 1
 
                     new_this_scan.append(community)
-                    score_str = f" [AI:{score}/10 {label}]" if score is not None else ""
-                    print(f"[NEW] {cid}{score_str}")
+                    print(f"[NEW] {cid}")
+
+                    # Score in background — doesn't block scan
+                    if ANTHROPIC_KEY:
+                        threading.Thread(
+                            target=score_community_background,
+                            args=(community,),
+                            daemon=True
+                        ).start()
 
         except Exception as e:
             print(f"[SCAN] Error on '{query}': {e}")
