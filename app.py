@@ -47,7 +47,7 @@ ANTHROPIC_KEY    = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
 # Mutable config so we can disable X API at runtime without global keyword
 _config = {"x_bearer": X_BEARER_TOKEN}
-SCAN_INTERVAL    = int(os.environ.get("SCAN_INTERVAL", 120))
+SCAN_INTERVAL    = int(os.environ.get("SCAN_INTERVAL", 0))  # 0 = manual only
 QUERY_DELAY      = 3
 RATE_LIMIT_PAUSE = 90
 MAX_FEED_SIZE    = 500
@@ -477,11 +477,14 @@ def scanner_loop():
     global last_scan_at, scans_run
     mode = "X API v2" if _config["x_bearer"] else "twikit"
     ai   = "Claude AI scoring ON" if ANTHROPIC_KEY else "no AI scoring"
-    print(f"[SCANNER] Started — {mode} | {ai} | every {SCAN_INTERVAL}s")
+    manual = SCAN_INTERVAL == 0
+    print(f"[SCANNER] Started — {mode} | {ai} | {'manual scans only' if manual else f'every {SCAN_INTERVAL}s'}")
 
-    # Pre-initialize twikit before first scan
     if not _config["x_bearer"]:
         ensure_twikit()
+
+    if manual:
+        return  # Don't loop — only scan when /api/scan-now is called
 
     while True:
         print(f"[SCANNER] Scan #{scans_run + 1}...")
