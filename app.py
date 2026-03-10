@@ -575,10 +575,12 @@ def clear_discoveries():
 def scan_now():
     def _run():
         global last_scan_at, scans_run
+        print(f"[MANUAL] Scan starting...")
         try:
             found        = scan_for_fresh()
             scans_run   += 1
             last_scan_at = int(time.time())
+            print(f"[MANUAL] Done — {len(found)} new, {total_found} total")
         except Exception as e:
             print(f"[MANUAL] Error: {e}")
     threading.Thread(target=_run, daemon=True).start()
